@@ -1,0 +1,33 @@
+tests/integration/fs_tests.rs
+  9adeedc4af7d7ab6 1
+tests/integration/mod.rs
+  9adeedc4af7d7ab6 1-4
+tests/integration/socket_tests.rs
+  9adeedc4af7d7ab6 1
+Cargo.toml
+  9adeedc4af7d7ab6 27-33
+src/main.rs
+  9adeedc4af7d7ab6 76-127,170-242,282-382,410-515,577-764,796-1014
+tests/common/mod.rs
+  9adeedc4af7d7ab6 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.0.40",
+  "base_commit_sha": "ed3adc05cb31b6e685b75fef5354a3c6208c6f23",
+  "prompts": {
+    "9adeedc4af7d7ab6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1e69af53-e4b8-4f4c-a242-7427c57d642e",
+        "model": "claude-sonnet-4-5-20250929"
+      },
+      "human_author": "Stefano Straus <stefano@straus.it>",
+      "messages": [],
+      "total_additions": 753,
+      "total_deletions": 0,
+      "accepted_lines": 753,
+      "overriden_lines": 0
+    }
+  }
+}
