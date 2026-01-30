@@ -1,0 +1,32 @@
+[package]
+name = "claudec"
+version = "0.1.0"
+edition = "2021"
+authors = ["Stefano Straus"]
+description = "Run Claude Code with a Unix socket API for programmatic command injection"
+license = "MIT"
+repository = "https://github.com/sstraus/claude-commander"
+keywords = ["claude", "cli", "automation", "pty"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+portable-pty = "0.8"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+term_size = "0.3"
+which = "6"
+dirs = "5"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["consoleapi", "processenv", "winbase", "handleapi"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"
