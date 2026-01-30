@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tokio::net::UnixListener;
 
 #[cfg(windows)]
-use tokio::net::windows::named_pipe::{ServerOptions, NamedPipeServer};
+use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 
 #[derive(Deserialize)]
 struct Command {
@@ -274,7 +274,7 @@ fn get_claude_projects_dir(cwd: &std::path::Path) -> PathBuf {
 
     // Convert cwd to Claude's folder naming: /Users/foo/bar -> -Users-foo-bar
     let cwd_str = cwd.to_string_lossy();
-    let folder_name = cwd_str.replace('/', "-").replace('\\', "-");
+    let folder_name = cwd_str.replace(['/', '\\'], "-");
 
     projects_base.join(folder_name)
 }
@@ -551,9 +551,9 @@ fn find_session_id(projects_dir: &std::path::Path, start_time: SystemTime) -> Op
         if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
             if let Ok(metadata) = path.metadata() {
                 // Use created time (birthtime on macOS/BSD, fallback to modified on Linux)
-                let created = metadata.created().unwrap_or_else(|_| {
-                    metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH)
-                });
+                let created = metadata
+                    .created()
+                    .unwrap_or_else(|_| metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH));
 
                 // Must be created after we started
                 if created >= start_time {
@@ -578,187 +578,232 @@ fn find_session_id(projects_dir: &std::path::Path, start_time: SystemTime) -> Op
 mod fs_tests {
     use super::*;
     use serial_test::serial;
-    use temp_env;
-    use tempfile::TempDir;
     use std::fs::File;
     use std::io::Write;
     use std::time::{Duration, SystemTime};
+    use temp_env;
+    use tempfile::TempDir;
 
     #[test]
     #[serial]
     fn test_find_session_id_single_file() {
         let temp_dir = TempDir::new().unwrap();
-        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
-            let projects_dir = temp_dir.path().join("projects").join("-test-project");
-            std::fs::create_dir_all(&projects_dir).unwrap();
+        temp_env::with_var(
+            "CLAUDE_CONFIG_DIR",
+            Some(temp_dir.path().to_str().unwrap()),
+            || {
+                let projects_dir = temp_dir.path().join("projects").join("-test-project");
+                std::fs::create_dir_all(&projects_dir).unwrap();
 
-            let start_time = SystemTime::now();
-            std::thread::sleep(Duration::from_millis(10));
+                let start_time = SystemTime::now();
+                std::thread::sleep(Duration::from_millis(10));
 
-            // Create a session file
-            let session_id = "648f28da-7391-45f5-9b8e-338f339e8fa0";
-            let session_file = projects_dir.join(format!("{}.jsonl", session_id));
-            File::create(&session_file).unwrap().write_all(b"{}").unwrap();
+                // Create a session file
+                let session_id = "648f28da-7391-45f5-9b8e-338f339e8fa0";
+                let session_file = projects_dir.join(format!("{}.jsonl", session_id));
+                File::create(&session_file)
+                    .unwrap()
+                    .write_all(b"{}")
+                    .unwrap();
 
-            let found = find_session_id(&projects_dir, start_time);
-            assert_eq!(found, Some(session_id.to_string()));
-        });
+                let found = find_session_id(&projects_dir, start_time);
+                assert_eq!(found, Some(session_id.to_string()));
+            },
+        );
     }
 
     #[test]
     #[serial]
     fn test_find_session_id_multiple_files_newest() {
         let temp_dir = TempDir::new().unwrap();
-        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
-            let projects_dir = temp_dir.path().join("projects").join("-test-project");
-            std::fs::create_dir_all(&projects_dir).unwrap();
+        temp_env::with_var(
+            "CLAUDE_CONFIG_DIR",
+            Some(temp_dir.path().to_str().unwrap()),
+            || {
+                let projects_dir = temp_dir.path().join("projects").join("-test-project");
+                std::fs::create_dir_all(&projects_dir).unwrap();
 
-            let start_time = SystemTime::now();
-            std::thread::sleep(Duration::from_millis(10));
+                let start_time = SystemTime::now();
+                std::thread::sleep(Duration::from_millis(10));
 
-            // Create older session
-            let old_id = "old-session-id";
-            File::create(projects_dir.join(format!("{}.jsonl", old_id)))
-                .unwrap()
-                .write_all(b"{}")
-                .unwrap();
+                // Create older session
+                let old_id = "old-session-id";
+                File::create(projects_dir.join(format!("{}.jsonl", old_id)))
+                    .unwrap()
+                    .write_all(b"{}")
+                    .unwrap();
 
-            std::thread::sleep(Duration::from_millis(10));
+                std::thread::sleep(Duration::from_millis(10));
 
-            // Create newer session
-            let new_id = "new-session-id";
-            File::create(projects_dir.join(format!("{}.jsonl", new_id)))
-                .unwrap()
-                .write_all(b"{}")
-                .unwrap();
+                // Create newer session
+                let new_id = "new-session-id";
+                File::create(projects_dir.join(format!("{}.jsonl", new_id)))
+                    .unwrap()
+                    .write_all(b"{}")
+                    .unwrap();
 
-            let found = find_session_id(&projects_dir, start_time);
-            assert_eq!(found, Some(new_id.to_string()));
-        });
+                let found = find_session_id(&projects_dir, start_time);
+                assert_eq!(found, Some(new_id.to_string()));
+            },
+        );
     }
 
     #[test]
     #[serial]
     fn test_find_session_id_ignores_old_files() {
         let temp_dir = TempDir::new().unwrap();
-        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
-            let projects_dir = temp_dir.path().join("projects").join("-test-project");
-            std::fs::create_dir_all(&projects_dir).unwrap();
+        temp_env::with_var(
+            "CLAUDE_CONFIG_DIR",
+            Some(temp_dir.path().to_str().unwrap()),
+            || {
+                let projects_dir = temp_dir.path().join("projects").join("-test-project");
+                std::fs::create_dir_all(&projects_dir).unwrap();
 
-            // Create old session before start_time
-            let old_id = "old-session-id";
-            File::create(projects_dir.join(format!("{}.jsonl", old_id)))
-                .unwrap()
-                .write_all(b"{}")
-                .unwrap();
+                // Create old session before start_time
+                let old_id = "old-session-id";
+                File::create(projects_dir.join(format!("{}.jsonl", old_id)))
+                    .unwrap()
+                    .write_all(b"{}")
+                    .unwrap();
 
-            std::thread::sleep(Duration::from_millis(10));
-            let start_time = SystemTime::now();
+                std::thread::sleep(Duration::from_millis(10));
+                let start_time = SystemTime::now();
 
-            let found = find_session_id(&projects_dir, start_time);
-            assert_eq!(found, None);
-        });
+                let found = find_session_id(&projects_dir, start_time);
+                assert_eq!(found, None);
+            },
+        );
     }
 
     #[test]
     #[serial]
     fn test_find_session_id_empty_directory() {
         let temp_dir = TempDir::new().unwrap();
-        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
-            let projects_dir = temp_dir.path().join("projects").join("-test-project");
-            std::fs::create_dir_all(&projects_dir).unwrap();
+        temp_env::with_var(
+            "CLAUDE_CONFIG_DIR",
+            Some(temp_dir.path().to_str().unwrap()),
+            || {
+                let projects_dir = temp_dir.path().join("projects").join("-test-project");
+                std::fs::create_dir_all(&projects_dir).unwrap();
 
-            let start_time = SystemTime::now();
-            let found = find_session_id(&projects_dir, start_time);
-            assert_eq!(found, None);
-        });
+                let start_time = SystemTime::now();
+                let found = find_session_id(&projects_dir, start_time);
+                assert_eq!(found, None);
+            },
+        );
     }
 
     #[test]
     #[serial]
     fn test_find_session_id_ignores_non_jsonl() {
         let temp_dir = TempDir::new().unwrap();
-        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
-            let projects_dir = temp_dir.path().join("projects").join("-test-project");
-            std::fs::create_dir_all(&projects_dir).unwrap();
+        temp_env::with_var(
+            "CLAUDE_CONFIG_DIR",
+            Some(temp_dir.path().to_str().unwrap()),
+            || {
+                let projects_dir = temp_dir.path().join("projects").join("-test-project");
+                std::fs::create_dir_all(&projects_dir).unwrap();
 
-            let start_time = SystemTime::now();
-            std::thread::sleep(Duration::from_millis(10));
+                let start_time = SystemTime::now();
+                std::thread::sleep(Duration::from_millis(10));
 
-            // Create non-jsonl file
-            File::create(projects_dir.join("test.txt"))
-                .unwrap()
-                .write_all(b"test")
-                .unwrap();
+                // Create non-jsonl file
+                File::create(projects_dir.join("test.txt"))
+                    .unwrap()
+                    .write_all(b"test")
+                    .unwrap();
 
-            let found = find_session_id(&projects_dir, start_time);
-            assert_eq!(found, None);
-        });
+                let found = find_session_id(&projects_dir, start_time);
+                assert_eq!(found, None);
+            },
+        );
     }
 
     #[test]
     #[serial]
     fn test_find_session_by_id_found() {
         let temp_dir = TempDir::new().unwrap();
-        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
-            let projects_base = temp_dir.path().join("projects");
-            let project_dir = projects_base.join("-test-project");
-            std::fs::create_dir_all(&project_dir).unwrap();
+        temp_env::with_var(
+            "CLAUDE_CONFIG_DIR",
+            Some(temp_dir.path().to_str().unwrap()),
+            || {
+                let projects_base = temp_dir.path().join("projects");
+                let project_dir = projects_base.join("-test-project");
+                std::fs::create_dir_all(&project_dir).unwrap();
 
-            let session_id = "648f28da-7391-45f5-9b8e-338f339e8fa0";
-            let session_file = project_dir.join(format!("{}.jsonl", session_id));
-            File::create(&session_file).unwrap().write_all(b"{}").unwrap();
+                let session_id = "648f28da-7391-45f5-9b8e-338f339e8fa0";
+                let session_file = project_dir.join(format!("{}.jsonl", session_id));
+                File::create(&session_file)
+                    .unwrap()
+                    .write_all(b"{}")
+                    .unwrap();
 
-            let found = find_session_by_id(session_id);
-            assert_eq!(found, Some(project_dir));
-        });
+                let found = find_session_by_id(session_id);
+                assert_eq!(found, Some(project_dir));
+            },
+        );
     }
 
     #[test]
     #[serial]
     fn test_find_session_by_id_not_found() {
         let temp_dir = TempDir::new().unwrap();
-        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
-            let projects_base = temp_dir.path().join("projects");
-            std::fs::create_dir_all(&projects_base).unwrap();
+        temp_env::with_var(
+            "CLAUDE_CONFIG_DIR",
+            Some(temp_dir.path().to_str().unwrap()),
+            || {
+                let projects_base = temp_dir.path().join("projects");
+                std::fs::create_dir_all(&projects_base).unwrap();
 
-            let found = find_session_by_id("nonexistent-id");
-            assert_eq!(found, None);
-        });
+                let found = find_session_by_id("nonexistent-id");
+                assert_eq!(found, None);
+            },
+        );
     }
 
     #[test]
     #[serial]
     fn test_find_session_by_id_multiple_projects() {
         let temp_dir = TempDir::new().unwrap();
-        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
-            let projects_base = temp_dir.path().join("projects");
-            let project1 = projects_base.join("-project1");
-            let project2 = projects_base.join("-project2");
-            std::fs::create_dir_all(&project1).unwrap();
-            std::fs::create_dir_all(&project2).unwrap();
+        temp_env::with_var(
+            "CLAUDE_CONFIG_DIR",
+            Some(temp_dir.path().to_str().unwrap()),
+            || {
+                let projects_base = temp_dir.path().join("projects");
+                let project1 = projects_base.join("-project1");
+                let project2 = projects_base.join("-project2");
+                std::fs::create_dir_all(&project1).unwrap();
+                std::fs::create_dir_all(&project2).unwrap();
 
-            let session_id = "test-session-id";
-            // Create session in project2
-            let session_file = project2.join(format!("{}.jsonl", session_id));
-            File::create(&session_file).unwrap().write_all(b"{}").unwrap();
+                let session_id = "test-session-id";
+                // Create session in project2
+                let session_file = project2.join(format!("{}.jsonl", session_id));
+                File::create(&session_file)
+                    .unwrap()
+                    .write_all(b"{}")
+                    .unwrap();
 
-            let found = find_session_by_id(session_id);
-            assert_eq!(found, Some(project2));
-        });
+                let found = find_session_by_id(session_id);
+                assert_eq!(found, Some(project2));
+            },
+        );
     }
 
     #[test]
     #[serial]
     fn test_find_session_by_id_empty_projects() {
         let temp_dir = TempDir::new().unwrap();
-        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
-            let projects_base = temp_dir.path().join("projects");
-            std::fs::create_dir_all(&projects_base).unwrap();
+        temp_env::with_var(
+            "CLAUDE_CONFIG_DIR",
+            Some(temp_dir.path().to_str().unwrap()),
+            || {
+                let projects_base = temp_dir.path().join("projects");
+                std::fs::create_dir_all(&projects_base).unwrap();
 
-            let found = find_session_by_id("any-id");
-            assert_eq!(found, None);
-        });
+                let found = find_session_by_id("any-id");
+                assert_eq!(found, None);
+            },
+        );
     }
 }
 
@@ -945,8 +990,9 @@ mod async_tests {
 
         let result = tokio::time::timeout(
             Duration::from_secs(1),
-            wait_for_session_id(projects_dir, start_time, logo_detected)
-        ).await;
+            wait_for_session_id(projects_dir, start_time, logo_detected),
+        )
+        .await;
 
         // Should timeout or return None
         assert!(result.is_err() || result.unwrap().is_none());
@@ -954,8 +1000,8 @@ mod async_tests {
 
     #[tokio::test]
     async fn test_wait_for_session_id_logo_detected_no_session() {
-        use tempfile::TempDir;
         use std::fs;
+        use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
         let projects_dir = temp_dir.path().to_path_buf();
@@ -968,8 +1014,9 @@ mod async_tests {
 
         let result = tokio::time::timeout(
             Duration::from_secs(2),
-            wait_for_session_id(projects_dir, start_time, logo_detected)
-        ).await;
+            wait_for_session_id(projects_dir, start_time, logo_detected),
+        )
+        .await;
 
         // Logo detected but no session file
         assert!(result.is_err() || result.unwrap().is_none());
@@ -977,9 +1024,9 @@ mod async_tests {
 
     #[tokio::test]
     async fn test_wait_for_session_id_success() {
-        use tempfile::TempDir;
         use std::fs::{self, File};
         use std::io::Write;
+        use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
         let projects_dir = temp_dir.path().to_path_buf();
@@ -998,13 +1045,17 @@ mod async_tests {
             tokio::time::sleep(Duration::from_millis(100)).await;
             let session_id = "test-session-id";
             let session_file = projects_clone.join(format!("{}.jsonl", session_id));
-            File::create(&session_file).unwrap().write_all(b"{}").unwrap();
+            File::create(&session_file)
+                .unwrap()
+                .write_all(b"{}")
+                .unwrap();
         });
 
         let result = tokio::time::timeout(
             Duration::from_secs(5),
-            wait_for_session_id(projects_dir, start_time, logo_detected)
-        ).await;
+            wait_for_session_id(projects_dir, start_time, logo_detected),
+        )
+        .await;
 
         assert!(result.is_ok());
         let session_id = result.unwrap();
@@ -1134,8 +1185,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let pty_master_resize = Arc::clone(&pty_master);
 
         tokio::spawn(async move {
-            let mut signals = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
-                .expect("Failed to create signal handler");
+            let mut signals =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
+                    .expect("Failed to create signal handler");
 
             while signals.recv().await.is_some() {
                 if let Some((cols, rows)) = term_size::dimensions() {
