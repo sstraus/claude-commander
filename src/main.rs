@@ -73,6 +73,58 @@ impl Response {
     }
 }
 
+#[cfg(test)]
+mod response_tests {
+    use super::*;
+
+    #[test]
+    fn test_response_ok_json() {
+        let response = Response::ok();
+        let json = serde_json::to_string(&response).unwrap();
+        assert_eq!(json, r#"{"status":"sent"}"#);
+    }
+
+    #[test]
+    fn test_response_error_json() {
+        let response = Response::error("something went wrong");
+        let json = serde_json::to_string(&response).unwrap();
+        assert_eq!(json, r#"{"error":"something went wrong"}"#);
+    }
+
+    #[test]
+    fn test_response_status_with_pid() {
+        let response = Response::status(true, "/tmp/test.sock", Some(1234));
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains(r#""running":true"#));
+        assert!(json.contains(r#""socket":"/tmp/test.sock""#));
+        assert!(json.contains(r#""pid":1234"#));
+        // Ensure no null fields
+        assert!(!json.contains("null"));
+    }
+
+    #[test]
+    fn test_response_status_without_pid() {
+        let response = Response::status(false, "/tmp/test.sock", None);
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains(r#""running":false"#));
+        assert!(json.contains(r#""socket":"/tmp/test.sock""#));
+        // Should not include pid field at all (not even as null)
+        assert!(!json.contains("pid"));
+    }
+
+    #[test]
+    fn test_response_none_values_omitted() {
+        let response = Response::ok();
+        let json = serde_json::to_string(&response).unwrap();
+        // Should only have status field
+        assert!(!json.contains("error"));
+        assert!(!json.contains("running"));
+        assert!(!json.contains("socket"));
+        assert!(!json.contains("pid"));
+        assert!(!json.contains("bytes"));
+    }
+}
+
 fn parse_escape_sequences(s: &str) -> Vec<u8> {
     let mut result = Vec::new();
     let mut chars = s.chars().peekable();
@@ -115,6 +167,79 @@ fn parse_escape_sequences(s: &str) -> Vec<u8> {
     result
 }
 
+#[cfg(test)]
+mod parse_escape_tests {
+    use super::*;
+
+    #[test]
+    fn test_hex_escape_single() {
+        let result = parse_escape_sequences("\\x0d");
+        assert_eq!(result, vec![0x0d]);
+    }
+
+    #[test]
+    fn test_hex_escape_ansi() {
+        let result = parse_escape_sequences("\\x1b[A");
+        assert_eq!(result, vec![0x1b, b'[', b'A']);
+    }
+
+    #[test]
+    fn test_standard_escape_carriage_return() {
+        let result = parse_escape_sequences("\\r");
+        assert_eq!(result, vec![b'\r']);
+    }
+
+    #[test]
+    fn test_standard_escape_newline() {
+        let result = parse_escape_sequences("\\n");
+        assert_eq!(result, vec![b'\n']);
+    }
+
+    #[test]
+    fn test_standard_escape_tab() {
+        let result = parse_escape_sequences("\\t");
+        assert_eq!(result, vec![b'\t']);
+    }
+
+    #[test]
+    fn test_standard_escape_backslash() {
+        let result = parse_escape_sequences("\\\\");
+        assert_eq!(result, vec![b'\\']);
+    }
+
+    #[test]
+    fn test_mixed_content() {
+        let result = parse_escape_sequences("Hello\\x0dWorld\\n");
+        assert_eq!(result, b"Hello\rWorld\n");
+    }
+
+    #[test]
+    fn test_empty_string() {
+        let result = parse_escape_sequences("");
+        assert_eq!(result, Vec::<u8>::new());
+    }
+
+    #[test]
+    fn test_invalid_hex_sequence() {
+        // Invalid hex should skip the sequence
+        let result = parse_escape_sequences("\\xZZ");
+        // Should push nothing for invalid hex
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_trailing_backslash() {
+        let result = parse_escape_sequences("test\\");
+        assert_eq!(result, b"test\\");
+    }
+
+    #[test]
+    fn test_utf8_multibyte() {
+        let result = parse_escape_sequences("Hello 世界");
+        assert_eq!(result, "Hello 世界".as_bytes());
+    }
+}
+
 fn get_socket_path(session_id: &str) -> String {
     // If explicit socket path set, use it
     if let Ok(path) = std::env::var("CLAUDE_SOCKET") {
@@ -154,6 +279,107 @@ fn get_claude_projects_dir(cwd: &std::path::Path) -> PathBuf {
     projects_base.join(folder_name)
 }
 
+#[cfg(test)]
+mod env_tests {
+    use super::*;
+    use serial_test::serial;
+    use temp_env;
+
+    #[test]
+    #[serial]
+    #[cfg(unix)]
+    fn test_socket_path_default_unix() {
+        temp_env::with_var_unset("CLAUDE_SOCKET", || {
+            let path = get_socket_path("test-id");
+            assert_eq!(path, "/tmp/claudec-test-id.sock");
+        });
+    }
+
+    #[test]
+    #[serial]
+    #[cfg(windows)]
+    fn test_socket_path_default_windows() {
+        temp_env::with_var_unset("CLAUDE_SOCKET", || {
+            let path = get_socket_path("test-id");
+            assert_eq!(path, r"\\.\pipe\claudec-test-id");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_socket_path_env_override() {
+        temp_env::with_var("CLAUDE_SOCKET", Some("/custom/path.sock"), || {
+            let path = get_socket_path("test-id");
+            assert_eq!(path, "/custom/path.sock");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_claude_projects_base_default() {
+        temp_env::with_var_unset("CLAUDE_CONFIG_DIR", || {
+            let base = get_claude_projects_base();
+            assert!(base.to_string_lossy().contains(".claude"));
+            assert!(base.ends_with("projects"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_claude_projects_base_env_override() {
+        temp_env::with_var("CLAUDE_CONFIG_DIR", Some("/custom/config"), || {
+            let base = get_claude_projects_base();
+            assert_eq!(base, PathBuf::from("/custom/config/projects"));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_claude_projects_dir_path_conversion() {
+        temp_env::with_var("CLAUDE_CONFIG_DIR", Some("/tmp/test-config"), || {
+            let cwd = PathBuf::from("/Users/foo/bar");
+            let result = get_claude_projects_dir(&cwd);
+            assert_eq!(
+                result,
+                PathBuf::from("/tmp/test-config/projects/-Users-foo-bar")
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    #[cfg(windows)]
+    fn test_claude_projects_dir_windows_path() {
+        temp_env::with_var("CLAUDE_CONFIG_DIR", Some("C:\\test-config"), || {
+            let cwd = PathBuf::from("C:\\Users\\foo\\bar");
+            let result = get_claude_projects_dir(&cwd);
+            assert_eq!(
+                result,
+                PathBuf::from("C:\\test-config\\projects\\-C:-Users-foo-bar")
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_claude_cmd_default() {
+        temp_env::with_var_unset("CLAUDE_CMD", || {
+            let cmd = get_claude_cmd();
+            // Should either find claude in PATH or return "claude"
+            assert!(!cmd.is_empty());
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_claude_cmd_env_override() {
+        temp_env::with_var("CLAUDE_CMD", Some("/custom/bin/claude"), || {
+            let cmd = get_claude_cmd();
+            assert_eq!(cmd, "/custom/bin/claude");
+        });
+    }
+}
+
 /// Parse args to detect --resume or --continue flags
 fn parse_session_args(args: &[String]) -> SessionMode {
     // Check for --resume <id> or -r <id>
@@ -179,6 +405,112 @@ fn parse_session_args(args: &[String]) -> SessionMode {
     }
 
     SessionMode::New
+}
+
+#[cfg(test)]
+mod parse_session_args_tests {
+    use super::*;
+
+    #[test]
+    fn test_resume_long_flag() {
+        let args = vec![
+            String::from("--resume"),
+            String::from("648f28da-7391-45f5-9b8e-338f339e8fa0"),
+        ];
+        match parse_session_args(&args) {
+            SessionMode::Resume(id) => assert_eq!(id, "648f28da-7391-45f5-9b8e-338f339e8fa0"),
+            _ => panic!("Expected Resume mode"),
+        }
+    }
+
+    #[test]
+    fn test_resume_short_flag() {
+        let args = vec![
+            String::from("-r"),
+            String::from("648f28da-7391-45f5-9b8e-338f339e8fa0"),
+        ];
+        match parse_session_args(&args) {
+            SessionMode::Resume(id) => assert_eq!(id, "648f28da-7391-45f5-9b8e-338f339e8fa0"),
+            _ => panic!("Expected Resume mode"),
+        }
+    }
+
+    #[test]
+    fn test_resume_equals_syntax() {
+        let args = vec![String::from(
+            "--resume=648f28da-7391-45f5-9b8e-338f339e8fa0",
+        )];
+        match parse_session_args(&args) {
+            SessionMode::Resume(id) => assert_eq!(id, "648f28da-7391-45f5-9b8e-338f339e8fa0"),
+            _ => panic!("Expected Resume mode"),
+        }
+    }
+
+    #[test]
+    fn test_continue_long_flag() {
+        let args = vec![String::from("--continue")];
+        match parse_session_args(&args) {
+            SessionMode::Continue => (),
+            _ => panic!("Expected Continue mode"),
+        }
+    }
+
+    #[test]
+    fn test_continue_short_flag() {
+        let args = vec![String::from("-c")];
+        match parse_session_args(&args) {
+            SessionMode::Continue => (),
+            _ => panic!("Expected Continue mode"),
+        }
+    }
+
+    #[test]
+    fn test_no_flags_returns_new() {
+        let args = vec![String::from("some-arg")];
+        match parse_session_args(&args) {
+            SessionMode::New => (),
+            _ => panic!("Expected New mode"),
+        }
+    }
+
+    #[test]
+    fn test_empty_args_returns_new() {
+        let args: Vec<String> = vec![];
+        match parse_session_args(&args) {
+            SessionMode::New => (),
+            _ => panic!("Expected New mode"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_uuid_too_short() {
+        let args = vec![String::from("--resume"), String::from("short-id")];
+        match parse_session_args(&args) {
+            SessionMode::New => (),
+            _ => panic!("Expected New mode for invalid UUID"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_uuid_no_dashes() {
+        let args = vec![
+            String::from("--resume"),
+            String::from("648f28da739145f59b8e338f339e8fa0"),
+        ];
+        match parse_session_args(&args) {
+            SessionMode::New => (),
+            _ => panic!("Expected New mode for UUID without dashes"),
+        }
+    }
+
+    #[test]
+    fn test_resume_flag_missing_id() {
+        let args = vec![String::from("--resume")];
+        match parse_session_args(&args) {
+            SessionMode::New => (),
+            _ => panic!("Expected New mode when ID is missing"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -242,6 +574,194 @@ fn find_session_id(projects_dir: &std::path::Path, start_time: SystemTime) -> Op
     newest.map(|(id, _)| id)
 }
 
+#[cfg(test)]
+mod fs_tests {
+    use super::*;
+    use serial_test::serial;
+    use temp_env;
+    use tempfile::TempDir;
+    use std::fs::File;
+    use std::io::Write;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    #[serial]
+    fn test_find_session_id_single_file() {
+        let temp_dir = TempDir::new().unwrap();
+        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
+            let projects_dir = temp_dir.path().join("projects").join("-test-project");
+            std::fs::create_dir_all(&projects_dir).unwrap();
+
+            let start_time = SystemTime::now();
+            std::thread::sleep(Duration::from_millis(10));
+
+            // Create a session file
+            let session_id = "648f28da-7391-45f5-9b8e-338f339e8fa0";
+            let session_file = projects_dir.join(format!("{}.jsonl", session_id));
+            File::create(&session_file).unwrap().write_all(b"{}").unwrap();
+
+            let found = find_session_id(&projects_dir, start_time);
+            assert_eq!(found, Some(session_id.to_string()));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_session_id_multiple_files_newest() {
+        let temp_dir = TempDir::new().unwrap();
+        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
+            let projects_dir = temp_dir.path().join("projects").join("-test-project");
+            std::fs::create_dir_all(&projects_dir).unwrap();
+
+            let start_time = SystemTime::now();
+            std::thread::sleep(Duration::from_millis(10));
+
+            // Create older session
+            let old_id = "old-session-id";
+            File::create(projects_dir.join(format!("{}.jsonl", old_id)))
+                .unwrap()
+                .write_all(b"{}")
+                .unwrap();
+
+            std::thread::sleep(Duration::from_millis(10));
+
+            // Create newer session
+            let new_id = "new-session-id";
+            File::create(projects_dir.join(format!("{}.jsonl", new_id)))
+                .unwrap()
+                .write_all(b"{}")
+                .unwrap();
+
+            let found = find_session_id(&projects_dir, start_time);
+            assert_eq!(found, Some(new_id.to_string()));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_session_id_ignores_old_files() {
+        let temp_dir = TempDir::new().unwrap();
+        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
+            let projects_dir = temp_dir.path().join("projects").join("-test-project");
+            std::fs::create_dir_all(&projects_dir).unwrap();
+
+            // Create old session before start_time
+            let old_id = "old-session-id";
+            File::create(projects_dir.join(format!("{}.jsonl", old_id)))
+                .unwrap()
+                .write_all(b"{}")
+                .unwrap();
+
+            std::thread::sleep(Duration::from_millis(10));
+            let start_time = SystemTime::now();
+
+            let found = find_session_id(&projects_dir, start_time);
+            assert_eq!(found, None);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_session_id_empty_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
+            let projects_dir = temp_dir.path().join("projects").join("-test-project");
+            std::fs::create_dir_all(&projects_dir).unwrap();
+
+            let start_time = SystemTime::now();
+            let found = find_session_id(&projects_dir, start_time);
+            assert_eq!(found, None);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_session_id_ignores_non_jsonl() {
+        let temp_dir = TempDir::new().unwrap();
+        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
+            let projects_dir = temp_dir.path().join("projects").join("-test-project");
+            std::fs::create_dir_all(&projects_dir).unwrap();
+
+            let start_time = SystemTime::now();
+            std::thread::sleep(Duration::from_millis(10));
+
+            // Create non-jsonl file
+            File::create(projects_dir.join("test.txt"))
+                .unwrap()
+                .write_all(b"test")
+                .unwrap();
+
+            let found = find_session_id(&projects_dir, start_time);
+            assert_eq!(found, None);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_session_by_id_found() {
+        let temp_dir = TempDir::new().unwrap();
+        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
+            let projects_base = temp_dir.path().join("projects");
+            let project_dir = projects_base.join("-test-project");
+            std::fs::create_dir_all(&project_dir).unwrap();
+
+            let session_id = "648f28da-7391-45f5-9b8e-338f339e8fa0";
+            let session_file = project_dir.join(format!("{}.jsonl", session_id));
+            File::create(&session_file).unwrap().write_all(b"{}").unwrap();
+
+            let found = find_session_by_id(session_id);
+            assert_eq!(found, Some(project_dir));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_session_by_id_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
+            let projects_base = temp_dir.path().join("projects");
+            std::fs::create_dir_all(&projects_base).unwrap();
+
+            let found = find_session_by_id("nonexistent-id");
+            assert_eq!(found, None);
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_session_by_id_multiple_projects() {
+        let temp_dir = TempDir::new().unwrap();
+        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
+            let projects_base = temp_dir.path().join("projects");
+            let project1 = projects_base.join("-project1");
+            let project2 = projects_base.join("-project2");
+            std::fs::create_dir_all(&project1).unwrap();
+            std::fs::create_dir_all(&project2).unwrap();
+
+            let session_id = "test-session-id";
+            // Create session in project2
+            let session_file = project2.join(format!("{}.jsonl", session_id));
+            File::create(&session_file).unwrap().write_all(b"{}").unwrap();
+
+            let found = find_session_by_id(session_id);
+            assert_eq!(found, Some(project2));
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_session_by_id_empty_projects() {
+        let temp_dir = TempDir::new().unwrap();
+        temp_env::with_var("CLAUDE_CONFIG_DIR", Some(temp_dir.path().to_str().unwrap()), || {
+            let projects_base = temp_dir.path().join("projects");
+            std::fs::create_dir_all(&projects_base).unwrap();
+
+            let found = find_session_by_id("any-id");
+            assert_eq!(found, None);
+        });
+    }
+}
+
 /// Wait for Claude logo to appear, then find the session file
 async fn wait_for_session_id(
     projects_dir: PathBuf,
@@ -271,6 +791,225 @@ async fn wait_for_session_id(
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     None
+}
+
+#[cfg(test)]
+mod async_tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn test_handle_command_send_with_submit() {
+        let (tx, mut rx) = mpsc::channel(10);
+        let cmd = Command {
+            action: "send".to_string(),
+            text: Some("test message".to_string()),
+            keys: None,
+            submit: Some(true),
+        };
+
+        let response = handle_command(cmd, &tx, "/test.sock", None).await;
+
+        // Check response
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains(r#""status":"sent""#));
+
+        // Check channel received correct data
+        let msg = rx.recv().await.unwrap();
+        assert_eq!(msg, b"test message");
+
+        let enter = rx.recv().await.unwrap();
+        assert_eq!(enter, vec![b'\r']);
+    }
+
+    #[tokio::test]
+    async fn test_handle_command_send_without_submit() {
+        let (tx, mut rx) = mpsc::channel(10);
+        let cmd = Command {
+            action: "send".to_string(),
+            text: Some("test message".to_string()),
+            keys: None,
+            submit: Some(false),
+        };
+
+        let response = handle_command(cmd, &tx, "/test.sock", None).await;
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains(r#""status":"sent""#));
+
+        // Should only receive the message, not enter
+        let msg = rx.recv().await.unwrap();
+        assert_eq!(msg, b"test message");
+
+        // Should not receive enter
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_handle_command_send_missing_text() {
+        let (tx, _rx) = mpsc::channel(10);
+        let cmd = Command {
+            action: "send".to_string(),
+            text: None,
+            keys: None,
+            submit: None,
+        };
+
+        let response = handle_command(cmd, &tx, "/test.sock", None).await;
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains(r#""error":"text field required""#));
+    }
+
+    #[tokio::test]
+    async fn test_handle_command_keys() {
+        let (tx, mut rx) = mpsc::channel(10);
+        let cmd = Command {
+            action: "keys".to_string(),
+            text: None,
+            keys: Some("\\x1b[A".to_string()),
+            submit: None,
+        };
+
+        let response = handle_command(cmd, &tx, "/test.sock", None).await;
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains(r#""status":"sent""#));
+        assert!(json.contains(r#""bytes":3"#));
+
+        let msg = rx.recv().await.unwrap();
+        assert_eq!(msg, vec![0x1b, b'[', b'A']);
+    }
+
+    #[tokio::test]
+    async fn test_handle_command_keys_missing() {
+        let (tx, _rx) = mpsc::channel(10);
+        let cmd = Command {
+            action: "keys".to_string(),
+            text: None,
+            keys: None,
+            submit: None,
+        };
+
+        let response = handle_command(cmd, &tx, "/test.sock", None).await;
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains(r#""error":"keys field required""#));
+    }
+
+    #[tokio::test]
+    async fn test_handle_command_status() {
+        let (tx, _rx) = mpsc::channel(10);
+        let cmd = Command {
+            action: "status".to_string(),
+            text: None,
+            keys: None,
+            submit: None,
+        };
+
+        let response = handle_command(cmd, &tx, "/test.sock", Some(1234)).await;
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains(r#""running":true"#));
+        assert!(json.contains(r#""socket":"/test.sock""#));
+        assert!(json.contains(r#""pid":1234"#));
+    }
+
+    #[tokio::test]
+    async fn test_handle_command_unknown_action() {
+        let (tx, _rx) = mpsc::channel(10);
+        let cmd = Command {
+            action: "invalid".to_string(),
+            text: None,
+            keys: None,
+            submit: None,
+        };
+
+        let response = handle_command(cmd, &tx, "/test.sock", None).await;
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains(r#""error":"Unknown action"#));
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_session_id_timeout_no_logo() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let projects_dir = temp_dir.path().to_path_buf();
+        let start_time = SystemTime::now();
+        let logo_detected = Arc::new(AtomicBool::new(false));
+
+        // Use pause to make this test deterministic and fast
+        tokio::time::pause();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            wait_for_session_id(projects_dir, start_time, logo_detected)
+        ).await;
+
+        // Should timeout or return None
+        assert!(result.is_err() || result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_session_id_logo_detected_no_session() {
+        use tempfile::TempDir;
+        use std::fs;
+
+        let temp_dir = TempDir::new().unwrap();
+        let projects_dir = temp_dir.path().to_path_buf();
+        fs::create_dir_all(&projects_dir).unwrap();
+
+        let start_time = SystemTime::now();
+        let logo_detected = Arc::new(AtomicBool::new(true));
+
+        tokio::time::pause();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            wait_for_session_id(projects_dir, start_time, logo_detected)
+        ).await;
+
+        // Logo detected but no session file
+        assert!(result.is_err() || result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_session_id_success() {
+        use tempfile::TempDir;
+        use std::fs::{self, File};
+        use std::io::Write;
+
+        let temp_dir = TempDir::new().unwrap();
+        let projects_dir = temp_dir.path().to_path_buf();
+        fs::create_dir_all(&projects_dir).unwrap();
+
+        let start_time = SystemTime::now();
+        let logo_detected = Arc::new(AtomicBool::new(false));
+
+        // Spawn a task to simulate logo detection and session creation
+        let logo_clone = logo_detected.clone();
+        let projects_clone = projects_dir.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            logo_clone.store(true, Ordering::Relaxed);
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let session_id = "test-session-id";
+            let session_file = projects_clone.join(format!("{}.jsonl", session_id));
+            File::create(&session_file).unwrap().write_all(b"{}").unwrap();
+        });
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            wait_for_session_id(projects_dir, start_time, logo_detected)
+        ).await;
+
+        assert!(result.is_ok());
+        let session_id = result.unwrap();
+        assert_eq!(session_id, Some("test-session-id".to_string()));
+    }
 }
 
 fn get_claude_cmd() -> String {

@@ -24,6 +24,13 @@ libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["consoleapi", "processenv", "winbase", "handleapi"] }
 
+[dev-dependencies]
+tokio-test = "0.4"      # Async testing utilities
+tempfile = "3"          # Temporary directories/files
+serial_test = "3"       # Serial test execution for env vars
+temp-env = "0.3"        # Scoped environment variable manipulation
+assert_matches = "1.5"  # Better pattern matching assertions
+
 [profile.release]
 opt-level = "z"
 lto = true
