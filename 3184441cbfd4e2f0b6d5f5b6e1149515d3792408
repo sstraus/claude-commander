@@ -1,0 +1,23 @@
+src/main.rs
+  9adeedc4af7d7ab6 277
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.0.40",
+  "base_commit_sha": "3184441cbfd4e2f0b6d5f5b6e1149515d3792408",
+  "prompts": {
+    "9adeedc4af7d7ab6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1e69af53-e4b8-4f4c-a242-7427c57d642e",
+        "model": "claude-sonnet-4-5-20250929"
+      },
+      "human_author": "Stefano Straus <stefano@straus.it>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}
